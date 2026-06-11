@@ -18,3 +18,7 @@ def test_run_agent_turn_grounds_answer():
 def test_run_agent_turn_miss():
     out = srv.run_agent_turn([_user("tell me a joke")])
     assert "don't have anything" in out.lower()
+
+def test_retrieve_no_false_positive_on_substring():
+    # "business" appears as a token only in the topic, not the query phrase below
+    assert srv.retrieve("I want to do good work with you") == []

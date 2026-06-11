@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Dict, List, Optional, Union
@@ -117,15 +118,18 @@ CORPUS = {
     "shipping": "Standard shipping takes three to five business days.",
     "warranty": "Every product includes a one-year limited warranty.",
 }
-TOP_K = int(os.getenv("RAG_TOP_K", "1"))
+try:
+    TOP_K = max(1, int(os.getenv("RAG_TOP_K", "1")))
+except (TypeError, ValueError):
+    TOP_K = 1
 
 
 def retrieve(query: str, corpus: dict = CORPUS, top_k: int = TOP_K) -> list:
     """Return up to top_k (topic, doc) pairs whose topic words appear in the query."""
-    q = query.lower()
+    words = set(re.findall(r"[a-z0-9]+", query.lower()))
     scored = []
     for topic, doc in corpus.items():
-        score = sum(1 for word in topic.split() if word in q)
+        score = sum(1 for word in topic.split() if word in words)
         if score > 0:
             scored.append((score, topic, doc))
     scored.sort(key=lambda s: s[0], reverse=True)
@@ -151,10 +155,8 @@ def _extract_last_user_text(messages: list) -> str:
 def run_agent_turn(messages: list) -> str:
     hits = retrieve(_extract_last_user_text(messages))
     if not hits:
-        return (
-            "I don't have anything on that yet. You can ask about our refund "
-            "policy, business hours, shipping, or warranty."
-        )
+        topics = ", ".join(corpus_key for corpus_key in CORPUS)
+        return f"I don't have anything on that yet. You can ask about: {topics}."
     snippets = " ".join(doc for _, doc in hits)
     return f"Based on our docs: {snippets}"
 

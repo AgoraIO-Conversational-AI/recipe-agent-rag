@@ -1,4 +1,4 @@
-# Agora Agent Backend — Custom LLM Recipe
+# Agora Agent Backend — RAG Recipe
 
 FastAPI service that owns Agora token generation and agent session lifecycle for
 the custom-llm recipe. It is the service the web client reaches through the
