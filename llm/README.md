@@ -1,11 +1,30 @@
-# Custom LLM Endpoint — Mock
+# RAG LLM Endpoint — Mock
 
 An OpenAI-compatible `POST /chat/completions` server (port 8001) that Agora cloud
-calls during a conversation. This mock returns canned streaming responses so you
-can exercise the full STT → custom LLM → TTS pipeline with **no LLM API key**.
+calls during a conversation. On each user query this endpoint retrieves the
+best-matching document from a small in-code corpus and returns a grounded reply
+("Based on our docs: …"), so you can exercise the full STT → RAG LLM → TTS
+pipeline with **no LLM API key**.
 
 It has no `agora-agents` dependency — it is a plain FastAPI app, which is exactly
-the boundary you replace with your own model.
+the boundary you replace with your own RAG pipeline.
+
+## How it works
+
+```
+user query
+  │
+  ▼  retrieve(query)
+  │  score each CORPUS topic by word overlap with query
+  │  return top-K (topic, doc) pairs
+  ▼
+  if hits:  "Based on our docs: <doc snippets>"
+  if miss:  "I don't have anything on that yet. You can ask about …"
+```
+
+`CORPUS` is a plain Python dict in `src/custom_llm_server.py`. `retrieve()` is real
+keyword-scoring code. The generation step is mocked (no LLM API calls). Tests live
+in `tests/test_rag.py`.
 
 ## The contract
 
@@ -44,8 +63,16 @@ This mock does **not** authenticate. A production endpoint should validate the
 `Authorization: Bearer <CUSTOM_LLM_API_KEY>` header that Agora cloud forwards
 (the key you set on the agent backend).
 
-## Replace the mock
+## Replacing the mock
 
-Edit `get_mock_response()` in `src/custom_llm_server.py`. Examples: call a local
-model (Ollama/vLLM), inject RAG context before generating, or route models by
-content.
+Swap `CORPUS` and `retrieve()` in `src/custom_llm_server.py` for a real vector
+store (e.g. ChromaDB, pgvector, Pinecone). Keep `run_agent_turn()` and the OpenAI
+streaming contract unchanged. Adjust `RAG_TOP_K` in `llm/.env.local` to control
+how many docs are retrieved per query (default `1`).
+
+## Environment
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `CUSTOM_LLM_PORT` | `8001` | Listening port |
+| `RAG_TOP_K` | `1` | Number of corpus docs to retrieve per query |
