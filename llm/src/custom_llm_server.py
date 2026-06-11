@@ -1,8 +1,9 @@
 """
-Custom LLM Server — Mock Implementation
+RAG LLM Server — Mock Implementation
 
 This server demonstrates how to implement an OpenAI-compatible Chat Completions
-endpoint that works with Agora Conversational AI Engine.
+endpoint that works with Agora Conversational AI Engine using retrieval-augmented
+generation.
 
 Key points:
 - Must implement POST /chat/completions
@@ -10,14 +11,13 @@ Key points:
 - Must follow OpenAI Chat Completions response format
 - Agora cloud sends Authorization header with the api_key you configured
 
-This mock version returns pre-defined responses so you can test the full
-voice pipeline (STT → Custom LLM → TTS) without any external LLM dependency.
+This mock version retrieves the best-matching document from an in-code corpus
+and grounds its reply in it ("Based on our docs: …"). Retrieval is real code;
+generation is mocked (no LLM API key needed).
 
 Replace the mock logic with your own:
-- Call your own model (local or remote)
-- Add RAG context injection
-- Implement tool calling
-- Route to different models based on content
+- Swap CORPUS + retrieve() for a real vector store (ChromaDB, pgvector, Pinecone)
+- Keep run_agent_turn() and the OpenAI streaming contract unchanged
 """
 import asyncio
 import json
@@ -46,10 +46,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Custom LLM Server (Mock)",
+    title="RAG LLM Server (Mock)",
     description=(
         "OpenAI-compatible Chat Completions endpoint for Agora Conversational AI Engine. "
-        "This mock implementation demonstrates the required interface contract."
+        "Retrieves matching docs from an in-code corpus and grounds replies in them."
     ),
     version="1.0.0",
 )
@@ -107,58 +107,56 @@ class ChatCompletionRequest(BaseModel):
 
 
 # =============================================================================
-# Mock Response Logic
-# =============================================================================
-# Replace this section with your actual LLM logic:
-# - Call a local model (Ollama, vLLM, etc.)
-# - Call a remote API
-# - Implement RAG retrieval + generation
-# - Add business logic, filtering, routing
+# Retrieval-augmented generation (mock, zero-key). Retrieval is real; generation
+# is mocked. Replace CORPUS + retrieve() with a real vector store.
 # =============================================================================
 
-MOCK_RESPONSES = [
-    "I'm a custom LLM running on your own server! This response is coming through Agora's Conversational AI pipeline, from your custom endpoint, through TTS, and into your ears as speech.",
-    "This is a mock response demonstrating the custom LLM integration. In production, you'd replace this with calls to your own model or any LLM provider.",
-    "Hello! I'm responding from your custom LLM server. The full pipeline is working: your speech was transcribed by STT, sent to me, and my response will be converted to speech by TTS.",
-    "Great question! I'm a mock LLM server that demonstrates how to build a custom endpoint compatible with Agora's Conversational AI Engine. You can replace me with any logic you want.",
-]
+CORPUS = {
+    "refund policy": "Refunds are available within 30 days of purchase with your receipt.",
+    "business hours": "We are open Monday to Friday, 9 a.m. to 6 p.m.",
+    "shipping": "Standard shipping takes three to five business days.",
+    "warranty": "Every product includes a one-year limited warranty.",
+}
+TOP_K = int(os.getenv("RAG_TOP_K", "1"))
 
-_response_counter = 0
+
+def retrieve(query: str, corpus: dict = CORPUS, top_k: int = TOP_K) -> list:
+    """Return up to top_k (topic, doc) pairs whose topic words appear in the query."""
+    q = query.lower()
+    scored = []
+    for topic, doc in corpus.items():
+        score = sum(1 for word in topic.split() if word in q)
+        if score > 0:
+            scored.append((score, topic, doc))
+    scored.sort(key=lambda s: s[0], reverse=True)
+    return [(topic, doc) for _, topic, doc in scored[:top_k]]
 
 
-def get_mock_response(messages: list) -> str:
-    """
-    Generate a mock response based on the conversation.
-
-    In a real implementation, this is where you'd:
-    - Extract the user's latest message
-    - Query your knowledge base / vector DB
-    - Call your own model
-    - Apply business logic
-    """
-    global _response_counter
-
-    # Extract the last user message for logging
-    last_user_msg = ""
+def _extract_last_user_text(messages: list) -> str:
     for msg in reversed(messages):
-        if hasattr(msg, "role") and msg.role == "user":
+        if getattr(msg, "role", None) == "user":
             content = msg.content
             if isinstance(content, str):
-                last_user_msg = content
-            elif isinstance(content, list) and len(content) > 0:
+                return content
+            if isinstance(content, list) and content:
                 first = content[0]
                 if isinstance(first, dict):
-                    last_user_msg = first.get("text", "")
-                elif hasattr(first, "text"):
-                    last_user_msg = first.text
-            break
+                    return first.get("text", "")
+                if hasattr(first, "text"):
+                    return first.text
+            return ""
+    return ""
 
-    logger.info(f"User said: {last_user_msg}")
 
-    # Cycle through mock responses
-    response = MOCK_RESPONSES[_response_counter % len(MOCK_RESPONSES)]
-    _response_counter += 1
-    return response
+def run_agent_turn(messages: list) -> str:
+    hits = retrieve(_extract_last_user_text(messages))
+    if not hits:
+        return (
+            "I don't have anything on that yet. You can ask about our refund "
+            "policy, business hours, shipping, or warranty."
+        )
+    snippets = " ".join(doc for _, doc in hits)
+    return f"Based on our docs: {snippets}"
 
 
 # =============================================================================
@@ -176,7 +174,7 @@ def make_chunk(chunk_id: str, model: str, content: str, finish_reason=None) -> s
         "id": chunk_id,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
-        "model": model or "mock-model",
+        "model": model or "rag-mock",
         "choices": [
             {
                 "index": 0,
@@ -194,7 +192,7 @@ def make_role_chunk(chunk_id: str, model: str) -> str:
         "id": chunk_id,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
-        "model": model or "mock-model",
+        "model": model or "rag-mock",
         "choices": [
             {
                 "index": 0,
@@ -232,8 +230,8 @@ async def chat_completions(
             detail="Only streaming mode is supported. Set stream=true.",
         )
 
-    # Generate mock response
-    response_text = get_mock_response(request.messages)
+    # Generate RAG response
+    response_text = run_agent_turn(request.messages)
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     model = request.model or "mock-model"
 
@@ -259,12 +257,12 @@ async def chat_completions(
 @app.get("/health")
 async def health():
     """Health check."""
-    return {"status": "ok", "service": "custom-llm-mock"}
+    return {"status": "ok", "service": "rag-llm-mock"}
 
 
 if __name__ == "__main__":
     port = int(os.getenv("CUSTOM_LLM_PORT", "8001"))
-    logger.info(f"Starting Custom LLM Server (Mock) on port {port}")
-    logger.info("This server returns mock responses — no LLM API key needed.")
+    logger.info(f"Starting RAG LLM Server (Mock) on port {port}")
+    logger.info("This server grounds replies in an in-code corpus — no LLM API key needed.")
     logger.info(f"Endpoint: http://0.0.0.0:{port}/chat/completions")
     uvicorn.run(app, host="0.0.0.0", port=port)
