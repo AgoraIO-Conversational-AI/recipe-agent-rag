@@ -7,14 +7,14 @@ recipes family, derived from the base `agent-quickstart-python` template.
 ## System shape
 
 - **`server/`** — Python FastAPI agent backend (:8000). Owns Agora token
-  generation and agent session lifecycle. Uses the `CustomLLM` vendor to point the
-  agent's LLM stage at the RAG LLM endpoint. SDK: `agora-agents>=2.0.0`
-  (`import agora_agent`).
-- **`llm/`** — Python FastAPI RAG LLM endpoint (:8001). OpenAI-compatible
-  `POST /chat/completions` that Agora cloud calls. Holds a small in-code `CORPUS`
-  dict; `retrieve()` scores topics against the user query and `run_agent_turn()`
-  returns a grounded reply. No `agora-agents` dependency. This is the component a
-  developer replaces with a real vector store.
+  generation, agent session lifecycle, **and** the RAG LLM endpoint mounted at
+  `/llm`. SDK: `agora-agents>=2.0.0` (`import agora_agent`).
+- **`server/src/llm.py`** — provider-agnostic FastAPI RAG LLM endpoint, mounted
+  into the API server at `/llm` (so Agora cloud calls
+  `<public>/llm/chat/completions`). OpenAI-compatible `POST /chat/completions`
+  mock that holds a small in-code `CORPUS` dict; `retrieve()` scores topics against
+  the user query and `run_agent_turn()` returns a grounded reply. No `agora-agents`
+  dependency. This is the component a developer replaces with a real vector store.
 - **`web/`** — Next.js 16 / React 19 / TypeScript frontend (:3000), resynced from
   the base quickstart with RAG branding.
 - Auth: Token007 from `AGORA_APP_ID` + `AGORA_APP_CERTIFICATE`.
@@ -24,37 +24,39 @@ recipes family, derived from the base `agent-quickstart-python` template.
 - UI and RTC/RTM lifecycle live in `web/`.
 - Browser-facing `/api/*` paths are Next rewrites (`web/next.config.ts`) to the
   agent backend; do not add `web/app/api/**/route.ts` for agent/token logic.
-- Token generation and agent lifecycle live in `server/src/`.
-- The OpenAI `/chat/completions` contract lives in `llm/src/`.
+- Token generation and agent lifecycle live in `server/src/server.py`.
+- The OpenAI `/chat/completions` contract and RAG logic live in `server/src/llm.py`.
 
 ## Supported modes
 
-- **Local:** `bun run dev` starts `llm` (:8001), `server` (:8000), and `web`
+- **Local:** `bun run dev` starts `server` (:8000, serving `/llm`) and `web`
   (:3000). The web app calls `/api/*`; Next rewrites to
-  `AGENT_BACKEND_URL=http://localhost:8000`. The RAG LLM endpoint must be
-  exposed publicly (ngrok) so Agora cloud can reach it.
-- **Deploy:** deploy `web` (Next) + `server` (reachable FastAPI) + `llm` (publicly
-  reachable FastAPI). Set `AGENT_BACKEND_URL` in the web deployment.
+  `AGENT_BACKEND_URL=http://localhost:8000`. The backend must be exposed publicly
+  (`ngrok http 8000`) so Agora cloud can reach `/llm/chat/completions`.
+- **Deploy:** deploy `web` (Next) + `server` (a single publicly reachable FastAPI
+  process that also serves `/llm`, so Agora cloud can reach
+  `/llm/chat/completions`). Set `AGENT_BACKEND_URL` in the web deployment.
 
 ## Patterns
 
 - Keep the web client calling `/api/*`; hide backend placement behind Next rewrites.
 - Keep token generation and the App Certificate in `server/`.
-- Keep the `llm/` endpoint free of `agora-agents` — it is provider-agnostic.
+- Keep `server/src/llm.py` free of `agora-agents` — it is provider-agnostic.
 - `CUSTOM_LLM_URL` is required and must be public; there is no localhost default.
 - Both `CUSTOM_LLM_URL` and `CUSTOM_LLM_API_KEY` are required by the `CustomLLM`
   vendor (the SDK rejects one without the other).
 - `RAG_TOP_K` (optional, default `1`) controls how many corpus docs are retrieved
-  per query; set it in `llm/.env.local`.
+  per query; set it in `server/.env.local`.
 
 ## Anti-patterns
 
 - Do not reintroduce Next Route Handlers for agent/token logic.
-- Do not add `agora-agents` to `llm/`.
+- Do not add `agora-agents` to `server/src/llm.py`.
 - Do not default `CUSTOM_LLM_URL` to localhost.
 - Do not put `PORT` in `server/.env.example` (it would clobber the random port
   that `verify:local:fastapi` injects via `load_dotenv(override=True)`).
 - Do not link to `docs/ai/` — that progressive-disclosure tree is not present yet.
+- Do not re-introduce a separate `llm/` directory or a second port.
 
 ## Commands
 
@@ -77,7 +79,7 @@ Narrower checks: `bun run verify:backend`, `bun run verify:local:fastapi`,
 3. Backend-affecting changes: `bun run verify:local` (or the narrower
    `verify:local:fastapi` / `verify:local:llm` / `verify:backend`) passes.
 4. If you change required env vars or setup steps, update the root README, the
-   relevant module README, and `server/.env.example` / `llm/.env.example` together.
+   relevant module README, and `server/.env.example` together.
 
 ## Git conventions
 
